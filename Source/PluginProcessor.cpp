@@ -80,9 +80,6 @@ void ACME4PluginAudioProcessor::prepareToPlay (double sampleRate, int /*samplesP
 
 void ACME4PluginAudioProcessor::releaseResources()
 {
-    // When playback stops, you can use this as an opportunity to free up any
-    // spare memory, etc.
-    keyboardState.reset();
 }
 
 void ACME4PluginAudioProcessor::reset()
@@ -94,6 +91,9 @@ void ACME4PluginAudioProcessor::reset()
 
 void ACME4PluginAudioProcessor::processBlock (AudioSampleBuffer& buffer, MidiBuffer& midiMessages)
 {
+	static bool isPaused = true;
+	static double lastBeat4thPos = 0.0;
+	
     const int numSamples = buffer.getNumSamples();
     int channel;
 	
@@ -115,61 +115,70 @@ void ACME4PluginAudioProcessor::processBlock (AudioSampleBuffer& buffer, MidiBuf
 		
 		const double beats16th  = fmod (newTime.ppqPosition, 1.0/(TICKSPEED/4.0)) / (1.0/(TICKSPEED/4.0));
 		
-		const double smpsPer16th = ((60.0/newTime.bpm)*getSampleRate())/(TICKSPEED/4.0);
-		double smpsFrom16th = beats16th*smpsPer16th-getLatencySamples();
+		// wait until we reach the beginning of the next 1/4 beat
+		isPaused &= !(newTime.ppqPosition <= lastBeat4thPos);
 		
-		const double pulseSmpLength = TICKLENGTH/1000.0*getSampleRate();
-		
-		while (smpsFrom16th<0 ) smpsFrom16th+=smpsPer16th;
-		
-		if (getNumInputChannels()>0) {
-			double smpCount = smpsFrom16th;
+		if (!isPaused)
+		{
+			const double smpsPer16th = ((60.0/newTime.bpm)*getSampleRate())/(TICKSPEED/4.0);
+			double smpsFrom16th = beats16th*smpsPer16th-getLatencySamples();
 			
-			if (smpsPer16th>0) {
+			const double pulseSmpLength = TICKLENGTH/1000.0*getSampleRate();
+			
+			while (smpsFrom16th<0 ) smpsFrom16th+=smpsPer16th;
+			
+			if (getNumInputChannels()>0) {
+				double smpCount = smpsFrom16th;
 				
-				float* channelData = buffer.getSampleData (0);
-				
-				for (int i = 0; i < numSamples; ++i)
-				{
-					const double modCount = fmod(smpCount,smpsPer16th);
+				if (smpsPer16th>0) { 
 					
-					if (modCount<pulseSmpLength) {
-						channelData[i] = +1.0;
-					} else {
-						channelData[i] = 0.0f;
+					float* channelData = buffer.getSampleData (0);
+					
+					for (int i = 0; i < numSamples; ++i)
+					{
+						const double modCount = fmod(smpCount,smpsPer16th);
+						
+						if (modCount<pulseSmpLength) {
+							channelData[i] = +1.0;
+						} else {
+							channelData[i] = 0.0f;
+						}
+						
+						smpCount+=1;
+						
 					}
 					
-					smpCount+=1;
+				}
+				
+				for (channel = 1; channel < getNumInputChannels(); ++channel)
+				{
+					float* firstChannelData = buffer.getSampleData (0);
+					float* channelData = buffer.getSampleData (channel);
+					
+					for (int i = 0; i < numSamples; ++i)
+					{
+						channelData[i] = firstChannelData[i];
+					}
 					
 				}
-				
-			}
-			
-			for (channel = 1; channel < getNumInputChannels(); ++channel)
-			{
-				float* firstChannelData = buffer.getSampleData (0);
-				float* channelData = buffer.getSampleData (channel);
-				
-				for (int i = 0; i < numSamples; ++i)
-				{
-					channelData[i] = firstChannelData[i];
-				}
-				
-			}
+			}				
 		}
 		
 	} else {
 		for (int i = 0; i < getNumInputChannels(); ++i)
 			buffer.clear (i, 0, buffer.getNumSamples());
+		isPaused = true;
+		lastBeat4thPos = newTime.ppqPosition;
 	}
-
+	
+	isPaused &= (newTime.isPlaying || newTime.isRecording);
+	
     // In case we have more outputs than inputs, we'll clear any output
     // channels that didn't contain input data, (because these aren't
     // guaranteed to be empty - they may contain garbage).
     for (int i = getNumInputChannels(); i < getNumOutputChannels(); ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
-
-
+	
 }
 
 //==============================================================================
